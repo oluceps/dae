@@ -256,6 +256,9 @@ loop:
 				if err != nil {
 					reloadingErr = err
 					std.Errorf("%+v", oops.Wrapf(err, "[Reload] Failed to reload; try to roll back configuration"))
+
+					prometheusRegistry = prometheus.NewRegistry()
+
 					// Load last config back.
 					newC, err = newControlPlane(obj, conf, externGeoDataDirs, prometheusRegistry)
 					if err != nil {
@@ -263,6 +266,7 @@ loop:
 						obj.Close()
 						c.Close()
 						std.Errorf("%+v", oops.Wrapf(err, "[Reload] Failed to roll back configuration"))
+						continue
 					}
 					newConf = conf
 					std.Errorln("[Reload] Last reload failed; rolled back configuration")
