@@ -130,7 +130,7 @@ func Run(conf *config.Config, externGeoDataDirs []string) {
 
 	startPprofServer(conf.Global.PprofPort)
 	prometheusRegistry := prometheus.NewRegistry()
-	startPrometheusServer(conf.Global.MetricsPort, prometheusRegistry)
+	startPrometheusServer(conf.Global.MetricsAddr, prometheusRegistry)
 
 	// New ControlPlane.
 	c, err := newControlPlane(nil, conf, externGeoDataDirs, prometheusRegistry)
@@ -285,7 +285,7 @@ loop:
 				oldC.Close()
 
 				startPprofServer(conf.Global.PprofPort)
-				startPrometheusServer(conf.Global.MetricsPort, prometheusRegistry)
+				startPrometheusServer(conf.Global.MetricsAddr, prometheusRegistry)
 			case syscall.SIGHUP:
 				// Ignore.
 				continue
@@ -327,18 +327,39 @@ func startPprofServer(port uint16) {
 	runtime.SetMutexProfileFraction(1)
 }
 
-func startPrometheusServer(port uint16, prometheusRegistry *prometheus.Registry) {
+func startPrometheusServer(addr string, prometheusRegistry *prometheus.Registry) {
 	if prometheusServer != nil {
-		prometheusServer.Shutdown(context.Background())
+		if err := prometheusServer.Shutdown(context.Background()); err != nil {
+			log.Printf("Error shutting down Prometheus server: %v", err)
+		}
 		prometheusServer = nil
 	}
 
-	if port == 0 {
+	if addr == "" {
+		log.Println("Prometheus server is disabled (address is empty).")
+		return
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		log.Printf("Prometheus server disabled: invalid address format '%s': %v", addr, err)
+		return
+	}
+	if port == "0" {
+		log.Printf("Prometheus server is disabled (address '%s' uses port 0).", addr)
 		return
 	}
 
-	prometheusServer = &http.Server{Addr: fmt.Sprintf("localhost:%d", port), Handler: promhttp.HandlerFor(prometheusRegistry, promhttp.HandlerOpts{})}
-	go prometheusServer.ListenAndServe()
+	prometheusServer = &http.Server{
+		Addr:    addr,
+		Handler: promhttp.HandlerFor(prometheusRegistry, promhttp.HandlerOpts{}),
+	}
+	go func() {
+		if err := prometheusServer.ListenAndServe(); err != http.ErrServerClosed {
+			log.Printf("Prometheus server failed or stopped unexpectedly: %v", err)
+		} else {
+			log.Println("Prometheus server shut down gracefully.")
+		}
+	}()
 }
 
 func newControlPlane(bpf interface{}, conf *config.Config, externGeoDataDirs []string, prometheusRegistry *prometheus.Registry) (c *control.ControlPlane, err error) {
